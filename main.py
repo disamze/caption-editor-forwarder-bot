@@ -1,4 +1,12 @@
-from pyrogram import Client, filters
+import asyncio
+
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+from pyrogram import Client, filters, idle
 from pyrogram.types import Message
 import os
 
@@ -23,24 +31,27 @@ app = Client(
 
 # =========================
 # SOURCE CHANNEL ID
-# (Where bot reads posts from)
 # =========================
 
 SOURCE_CHANNEL = -1003949636049
 
 # =========================
 # TARGET GROUP ID
-# (Where bot sends edited posts)
 # =========================
 
 TARGET_GROUP = -1003732913181
 
 # =========================
 # TOPIC ID
-# (Topic/thread inside group)
 # =========================
 
 TOPIC_ID = 9599
+
+# =========================
+# HOW MANY OLD POSTS TO COPY
+# =========================
+
+OLD_POST_LIMIT = 1100
 
 # =========================
 # WORDS TO REMOVE
@@ -48,7 +59,6 @@ TOPIC_ID = 9599
 
 REMOVE_WORDS = [
     "Extracted By: GHOST",
-    
 ]
 
 # =========================
@@ -65,6 +75,12 @@ DEFAULT_TEXT = """
 """
 
 # =========================
+# STORE PROCESSED IDS
+# =========================
+
+processed_messages = set()
+
+# =========================
 # CAPTION EDIT FUNCTION
 # =========================
 
@@ -75,13 +91,15 @@ def edit_caption(caption):
 
     new_caption = caption
 
-    # REMOVE UNWANTED WORDS
+    # REMOVE WORDS
     for word in REMOVE_WORDS:
         new_caption = new_caption.replace(word, "")
 
-    # REMOVE EXTRA SPACES
+    # REMOVE EMPTY LINES
     new_caption = "\n".join(
-        line.strip() for line in new_caption.splitlines() if line.strip()
+        line.strip()
+        for line in new_caption.splitlines()
+        if line.strip()
     )
 
     # ADD YOUR TEXT
@@ -90,11 +108,15 @@ def edit_caption(caption):
     return new_caption.strip()
 
 # =========================
-# MAIN MESSAGE HANDLER
+# SEND FUNCTION
 # =========================
 
-@app.on_message(filters.chat(SOURCE_CHANNEL))
-async def forward_post(client, message: Message):
+async def send_edited_post(message: Message):
+
+    if message.id in processed_messages:
+        return
+
+    processed_messages.add(message.id)
 
     caption = message.caption or message.text or ""
 
@@ -107,7 +129,7 @@ async def forward_post(client, message: Message):
         # =========================
         if message.photo:
 
-            await client.send_photo(
+            await app.send_photo(
                 chat_id=TARGET_GROUP,
                 photo=message.photo.file_id,
                 caption=edited_caption,
@@ -119,7 +141,7 @@ async def forward_post(client, message: Message):
         # =========================
         elif message.video:
 
-            await client.send_video(
+            await app.send_video(
                 chat_id=TARGET_GROUP,
                 video=message.video.file_id,
                 caption=edited_caption,
@@ -127,11 +149,11 @@ async def forward_post(client, message: Message):
             )
 
         # =========================
-        # DOCUMENT
+        # DOCUMENT / PDF
         # =========================
         elif message.document:
 
-            await client.send_document(
+            await app.send_document(
                 chat_id=TARGET_GROUP,
                 document=message.document.file_id,
                 caption=edited_caption,
@@ -143,7 +165,7 @@ async def forward_post(client, message: Message):
         # =========================
         elif message.audio:
 
-            await client.send_audio(
+            await app.send_audio(
                 chat_id=TARGET_GROUP,
                 audio=message.audio.file_id,
                 caption=edited_caption,
@@ -151,24 +173,75 @@ async def forward_post(client, message: Message):
             )
 
         # =========================
-        # TEXT MESSAGE
+        # TEXT
         # =========================
         elif message.text:
 
-            await client.send_message(
+            await app.send_message(
                 chat_id=TARGET_GROUP,
                 text=edited_caption,
                 message_thread_id=TOPIC_ID
             )
 
-        print("Message forwarded successfully")
+        print(f"Processed Message ID: {message.id}")
+
+        # DELAY TO PREVENT FLOODWAIT
+        await asyncio.sleep(2)
 
     except Exception as e:
-        print("ERROR:", e)
+        print(f"ERROR IN MESSAGE {message.id}: {e}")
+
+# =========================
+# PROCESS OLD MESSAGES
+# =========================
+
+async def process_old_messages():
+
+    print("Fetching old messages...")
+
+    count = 0
+
+    async for message in app.get_chat_history(
+        SOURCE_CHANNEL,
+        limit=OLD_POST_LIMIT
+    ):
+
+        await send_edited_post(message)
+
+        count += 1
+
+        print(f"Old messages processed: {count}")
+
+    print("Finished processing old messages.")
+
+# =========================
+# NEW MESSAGE HANDLER
+# =========================
+
+@app.on_message(filters.chat(SOURCE_CHANNEL))
+async def forward_post(client, message: Message):
+
+    await send_edited_post(message)
+
+# =========================
+# MAIN FUNCTION
+# =========================
+
+async def main():
+
+    await app.start()
+
+    print("Bot Started Successfully...")
+
+    # PROCESS OLD POSTS
+    await process_old_messages()
+
+    print("Now Listening For New Messages...")
+
+    await idle()
 
 # =========================
 # START BOT
 # =========================
 
-print("Bot Started Successfully...")
-app.run()
+app.run(main())
